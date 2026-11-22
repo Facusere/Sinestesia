@@ -26,7 +26,7 @@ Convierte sonido en imagen y lo analiza desde varios puntos de vista a la vez: f
 | Archivo de audio | Cualquier formato que reproduzca tu navegador; usa los controles nativos (reproducir, pausa, barra de tiempo). |
 | Audio de una pestaña | Elegí una pestaña y marcá "compartir audio". Solo Chromium. |
 
-Al cambiar de fuente se detienen la anterior (micrófono, captura o demostración) y se reinicia el historial del análisis.
+Al cambiar de fuente se detienen la anterior (micrófono, captura o demostración) y se reinicia el historial del análisis. Si cortás la captura de pestaña desde el navegador o se desconecta el micrófono, la app lo avisa.
 
 ## Métricas (barra superior)
 - **Volumen (RMS):** raíz del promedio de los cuadrados de la señal, en dB relativos al máximo (0 dB). Cuanto más cerca de 0, más fuerte.
@@ -34,6 +34,9 @@ Al cambiar de fuente se detienen la anterior (micrófono, captura o demostració
 - **Brillo (centroide espectral):** el "centro de masa" del espectro; sube cuando el sonido es más agudo o con más armónicos.
 - **Tempo estimado:** BPM entre 60 y 180 y un punto que late con cada golpe detectado.
 - **Graves · medios · agudos:** reparto de energía por debajo de 250 Hz, entre 250 Hz y 4 kHz, y por encima de 4 kHz.
+- En silencio (por debajo de −80 dB) la nota y el brillo muestran "—".
+
+Para ahorrar recursos, solo se dibujan las vistas cuyas tarjetas están en pantalla o la que está abierta; el espectrograma se dibuja siempre para no perder su historia.
 
 ## Vistas
 | Vista | Qué muestra y cómo leerla |
@@ -82,7 +85,7 @@ flujo espectral ──> envolvente de onsets ──> autocorrelación ──> BP
 
 ## Tests
 - `node test.js`: un tono de 440 Hz da La4, un acorde de Do mayor activa Do-Mi-Sol, un pulso a 120 BPM da 120, un patrón periódico genera diagonales, el RMS de un seno da 0,707.
-- `node smoke.test.js` (requiere `npm i jsdom`): recorre micrófono (error y éxito), captura de pestaña (con y sin audio), archivo, demostración con tempo de 120 BPM detectado, controles, cambio de paleta (acentos y colores realmente dibujados), congelar, las seis tarjetas con su ventana y exportación PNG, cierre por fondo y detención de fuentes al cambiar. Usa audio simulado, por lo que valida la lógica pero no cómo se ve ni suena en un navegador real.
+- `node smoke.test.js` (requiere `npm i jsdom`): recorre micrófono (error y éxito), captura de pestaña (con y sin audio), archivo, demostración con tempo de 120 BPM detectado, controles, cambio de paleta (acentos y colores realmente dibujados), congelar, las seis tarjetas con su ventana y exportación PNG, cierre por fondo, detención de fuentes al cambiar (incluido demo → micrófono → pestaña), aviso al cortar la captura, botón de archivo, liberación de la URL del archivo anterior y métricas en silencio. Usa audio simulado, por lo que valida la lógica pero no cómo se ve ni suena en un navegador real.
 
 ## Solución de problemas
 - **No se oye o no se ve nada:** probá la demostración. Si funciona, el problema es la fuente; si no, revisá la consola del navegador.

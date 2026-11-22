@@ -5,10 +5,10 @@ const seen=new Set();let K=0,stops=0,killed=0,dl=0,fills=0;
 w.HTMLCanvasElement.prototype.getContext=()=>new Proxy({},{get:(o,k)=>k==="createLinearGradient"?()=>({addColorStop(){}}):k==="createImageData"?(x,y)=>({data:new Uint8ClampedArray(x*y*4)}):k==="fillRect"?()=>{fills++}:k in o?o[k]:()=>{},set:(o,k,v)=>((k==="fillStyle"||k==="strokeStyle")&&typeof v==="string"&&seen.add(v),o[k]=v,true)});
 w.HTMLCanvasElement.prototype.toBlob=function(f){f(new w.Blob(["x"]))};
 const P=()=>({value:0,setValueAtTime(){},linearRampToValueAtTime(){},exponentialRampToValueAtTime(){},cancelScheduledValues(){}}),N=()=>({connect(){},disconnect(){}});
-w.AudioContext=class{constructor(){this.sampleRate=44100;this.currentTime=0;this.destination=N()}resume(){return Promise.resolve()}createGain(){return{...N(),gain:P()}}createOscillator(){return{...N(),frequency:P(),detune:P(),start(){},stop(){stops++}}}createStereoPanner(){return{...N(),pan:P()}}createChannelSplitter(){return N()}createMediaStreamSource(){return N()}createMediaElementSource(){return N()}
- createAnalyser(){return{...N(),fftSize:4096,smoothingTimeConstant:0,get frequencyBinCount(){return this.fftSize/2},getFloatFrequencyData(x){K++;const on=K%15<2;x.fill(-90);x[40]=on?-10:-70;x[39]=x[41]=on?-25:-80},getFloatTimeDomainData(x){for(let i=0;i<x.length;i++)x[i]=.3*Math.sin(i*.06)}}}};
+w.AudioContext=class{constructor(){this.sampleRate=44100;this.currentTime=0;this.destination=N()}resume(){return Promise.resolve()}createGain(){return{...N(),gain:P()}}createOscillator(){return{...N(),frequency:P(),detune:P(),start(){},stop(){if(this.done)throw new Error("InvalidStateError: oscilador ya detenido");this.done=1;stops++}}}createStereoPanner(){return{...N(),pan:P()}}createChannelSplitter(){return N()}createMediaStreamSource(){return N()}createMediaElementSource(){return N()}
+ createAnalyser(){return{...N(),fftSize:4096,smoothingTimeConstant:0,get frequencyBinCount(){return this.fftSize/2},getFloatFrequencyData(x){K++;if(w.__silent){x.fill(-140);return}const on=K%15<2;x.fill(-90);x[40]=on?-10:-70;x[39]=x[41]=on?-25:-80},getFloatTimeDomainData(x){for(let i=0;i<x.length;i++)x[i]=w.__silent?0:.3*Math.sin(i*.06)}}}};
 w.MediaStream=class{constructor(t){this.t=t}getTracks(){return this.t}};
-w.URL.createObjectURL=()=>"blob:x";w.URL.revokeObjectURL=()=>{};w.HTMLMediaElement.prototype.pause=()=>{};w.HTMLMediaElement.prototype.play=()=>Promise.resolve();
+let revoked=0,picks=0;w.URL.createObjectURL=()=>"blob:x";w.URL.revokeObjectURL=()=>{revoked++};w.HTMLInputElement.prototype.click=function(){if(this.type==="file")picks++};w.HTMLMediaElement.prototype.pause=()=>{};w.HTMLMediaElement.prototype.play=()=>Promise.resolve();
 w.HTMLAnchorElement.prototype.click=function(){dl++;a.ok(/^sinestesia-.*\.png$/.test(this.download))};
 const DP=w.HTMLDialogElement||w.HTMLElement;DP.prototype.showModal=function(){this.open=true};DP.prototype.close=function(){this.open=false;this.dispatchEvent(new w.Event("close"))};
 w.requestAnimationFrame=f=>q.push(f);w.eval(fs.readFileSync("analysis.js","utf8"));w.eval(fs.readFileSync("app.js","utf8"));
@@ -31,4 +31,9 @@ const d=w.document,G=id=>d.getElementById(id),g=id=>G(id).textContent,tick=()=>n
  for(const c of cards){c.click();a.ok(G("dlg").open);a.strictEqual(g("dt"),c.querySelector("h3").textContent);a.ok(G("dv").querySelector("canvas"));a.ok(G("dctl").contains(G("ctl")));run(5);G("dpng").click();G("dx").click();a.ok(!G("dlg").open);a.strictEqual(G("stage").querySelectorAll("canvas").length,6);a.ok(!G("dctl").contains(G("ctl")))}
  a.strictEqual(dl,6);cards[0].click();G("dlg").onclick({target:G("dlg")});a.ok(!G("dlg").open,"el fondo de la ventana la cierra");
  const s0=stops;G("mic").click();await tick();a.ok(stops>s0,"la demo se detiene al cambiar de fuente");
+ G("tab").click();await tick();a.ok(g("msg").includes("Capturando"),"demo → mic → pestaña no debe volver a detener la demo: "+g("msg"));
+ w.__aud[0].onended();a.ok(g("msg").includes("se detuvo"),"aviso al cortar la captura: "+g("msg"));
+ G("filebtn").click();a.strictEqual(picks,1,"el botón de archivo abre el selector");
+ const r0=revoked;await G("file").onchange({target:{files:[{name:"otra.mp3"}]}});a.ok(revoked>r0,"se libera la URL del archivo anterior");
+ w.__silent=true;run(40);a.strictEqual(g("m-cen"),"—","en silencio el brillo muestra —");a.strictEqual(g("m-note"),"—","en silencio la nota muestra —");w.__silent=false;
  console.log("smoke OK");process.exit(0)})().catch(e=>{console.error(e);process.exit(1)});

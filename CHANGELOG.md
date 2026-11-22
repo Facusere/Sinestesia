@@ -1,5 +1,17 @@
 # Historial de cambios · Sinestesia
 
+## 0.8 · Código legible y correcciones
+- **Código legible:** `app.js`, `analysis.js`, `index.html` y `style.css` dejaron de estar compactados en pocas líneas. Ahora tienen nombres descriptivos, secciones y comentarios; el comportamiento es el mismo.
+- **Error corregido:** cambiar de fuente dos veces después de la demostración (demo → micrófono → pestaña) fallaba con "No se pudo…", porque se intentaba detener otra vez los osciladores ya detenidos (`InvalidStateError` en navegadores reales). La demo ahora se detiene una sola vez.
+- **Error corregido:** cada archivo de audio nuevo dejaba la URL del anterior sin liberar (pérdida de memoria). Además se puede volver a elegir el mismo archivo.
+- **Error corregido:** si el usuario cortaba la captura de pestaña desde el navegador o se desconectaba el micrófono, la app no se enteraba. Ahora libera la fuente y lo avisa.
+- **Rendimiento:** solo se dibujan las vistas cuyas tarjetas están en pantalla (o la que está abierta en la ventana); las miniaturas se actualizan solo si se ven. El espectrograma se sigue dibujando siempre para no perder historia. La autosimilitud se recalcula solo cuando hay datos nuevos y reutiliza su lienzo auxiliar.
+- **Rendimiento:** la persistencia de la estela ya no se lee del DOM en cada cuadro.
+- **Accesibilidad:** "Archivo de audio" es ahora un botón real, enfocable y usable con teclado.
+- **Métricas en silencio:** por debajo de −80 dB la nota dominante y el brillo muestran "—" en lugar de valores producidos por el ruido.
+- Los canvas usan `system-ui` como fuente (antes solo `Segoe UI`, que no existe fuera de Windows).
+- La prueba de humo cubre estos casos: doble cambio de fuente, fin de la captura, botón de archivo, liberación de URL y métricas en silencio.
+
 ## 0.7 · Paleta global y fondo más visible
 - **Error corregido:** la paleta solo afectaba a algunas vistas. La estela estéreo usaba un ciclo de color propio, el fondo y los acentos de la interfaz tenían colores fijos, y el espectrograma conserva los colores de lo ya dibujado. Ahora la paleta define los colores de todas las vistas, del fondo y de la interfaz (variables CSS `--a1`, `--a2`, `--a3`), y refresca la autosimilitud y las miniaturas al instante.
 - Fondo más visible: barras más altas y opacas, con una punta más clara y colores de la paleta.
