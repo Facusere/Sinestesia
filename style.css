@@ -330,3 +330,42 @@ dialog::backdrop {
   padding-top: 20px;
   padding-bottom: 40px;
 }
+
+.ft p {
+  margin: 0 0 6px;
+}
+
+kbd {
+  font: 0.75rem/1 ui-monospace, monospace;
+  padding: 2px 5px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: var(--text);
+}
+
+.card kbd {
+  margin-left: 6px;
+  color: var(--muted);
+}
+
+/* ───── Canción completa y autosimilitud: se puede tocar para saltar ───── */
+#dv canvas.seekable {
+  cursor: pointer;
+}
+
+/* ───── Arrastrar y soltar ───── */
+body.dragging::after {
+  content: "Soltá el archivo para analizarlo";
+  position: fixed;
+  inset: 12px;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  border: 3px dashed var(--ac);
+  border-radius: 20px;
+  background: #0a0c13cc;
+  color: var(--ac);
+  font-size: 1.4rem;
+  pointer-events: none;
+}

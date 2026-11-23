@@ -11,10 +11,21 @@
   const $ = (id) => document.getElementById(id);
   const A = window.A;
   const noop = () => {};
+  const sleep = () => new Promise((resolve) => setTimeout(resolve, 0));
   const clamp = (value, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, value));
   const setMessage = (text) => {
     $("msg").textContent = text || "";
   };
+  const formatTime = (seconds) => Math.floor(seconds / 60) + ":" + String(Math.floor(seconds % 60)).padStart(2, "0");
+
+  /** Descarga un Blob con el nombre indicado. */
+  function download(blob, filename) {
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  }
 
   const MIN_HZ = 30;
   const MAX_HZ = 16000;
@@ -46,13 +57,22 @@
     },
     ssm: {
       title: "Autosimilitud",
-      desc: "Compara cada instante con todos los demás (últimos ~80 s). Las diagonales claras son partes que se repiten.",
+      desc: "Compara cada instante con todos los demás. Las diagonales claras son partes que se repiten. Con un archivo analizado muestra la canción completa: tocá la matriz para saltar a ese momento.",
+    },
+    tuner: {
+      title: "Afinador",
+      desc: "La nota más cercana al pico del sonido y cuántos cents está desafinada. Funciona mejor con una sola nota limpia.",
+    },
+    song: {
+      title: "Canción completa",
+      desc: "Espectrograma de todo el archivo de audio, con la posición actual. Tocá en cualquier punto para saltar ahí.",
     },
   };
+  const PANEL_KEYS = Object.keys(PANELS);
 
   const canvases = {};
   const contexts = {};
-  for (const key in PANELS) {
+  for (const key of PANEL_KEYS) {
     canvases[key] = $("c-" + key);
     contexts[key] = canvases[key].getContext("2d");
   }
@@ -90,7 +110,29 @@
 
   const colorAt = (t) => "rgb(" + colorTable[Math.round(clamp(t) * 255)].join() + ")";
 
-  setPalette(0);
+  // ───────────────────────── Ajustes guardados ─────────────────────────
+  // Suavizado, persistencia, resolución FFT y paleta se recuerdan entre visitas (localStorage).
+
+  const SETTINGS_KEY = "sinestesia:ajustes";
+  const SETTING_IDS = ["sm", "pers", "fft", "pal"];
+
+  function loadSettings() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
+      for (const id of SETTING_IDS) if (saved[id] != null) $(id).value = saved[id];
+    } catch {} // sin localStorage (modo privado, permisos): se usan los valores por defecto
+  }
+
+  function saveSettings() {
+    try {
+      const values = {};
+      for (const id of SETTING_IDS) values[id] = $(id).value;
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(values));
+    } catch {}
+  }
+
+  loadSettings();
+  setPalette(+$("pal").value || 0);
 
   // ───────────────────────── Estado ─────────────────────────
 
@@ -106,16 +148,17 @@
   // Buffers del analizador (se recrean al cambiar la resolución FFT)
   let freqDb, magnitude, prevMagnitude, wave, waveLeft, waveRight;
 
-  // Análisis
+  // Análisis en vivo
   const peakHold = []; // máximos recientes del espectro
   const chromaSmooth = new Array(12).fill(0);
+  const keyChroma = new Array(12).fill(0); // cromagrama de largo plazo para la tonalidad
   const features = []; // vectores para la autosimilitud
   const onsetEnvelope = []; // flujo espectral por cuadro
-  const BAND_EDGES = [30, 100, 200, 400, 800, 1600, 3200, 6400, 12800];
   const timers = { thumbs: 0, feature: 0, beat: 0, tempo: 0, metrics: 0 };
+  const tuner = { freq: 0, cents: 0 };
   let frozen = false;
   let fps = 60;
-  let bpm = 0;
+  let tempo = { bpm: 0, confidence: 0 };
   let lastFrameTime = 0;
   let level = 0; // volumen suavizado (lo usa el fondo)
   let beatFlash = 0;
@@ -123,6 +166,15 @@
   let radialRotation = 0;
   let trailPersistence = +$("pers").value;
   let ssmDirty = false;
+
+  // Análisis del archivo completo
+  let song = null; // { name, duration, spectrogram: canvas, ssm: canvas, key }
+  let songToken = 0; // invalida análisis en curso al cambiar de archivo
+  let songProgress = null; // 0..1 mientras se analiza
+
+  // Grabación de video
+  let recorder = null;
+  let recordDestination = null;
 
   // ───────────────────────── Fuentes de audio ─────────────────────────
 
@@ -179,8 +231,11 @@
     node.connect(mixAnalyser);
     node.connect(splitter);
     if (audible) node.connect(audioCtx.destination);
+    if (recorder && recordDestination) node.connect(recordDestination); // la grabación sigue a la fuente nueva
     features.length = 0;
     onsetEnvelope.length = 0;
+    keyChroma.fill(0);
+    ssmDirty = true;
   }
 
   /** Avisa y libera la fuente si el usuario corta el micrófono o la captura desde el navegador. */
@@ -208,11 +263,8 @@
     }
   };
 
-  $("filebtn").onclick = () => $("file").click();
-
-  $("file").onchange = async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
+  /** Reproduce un archivo de audio y arranca el análisis de la canción completa en segundo plano. */
+  async function loadFile(file) {
     try {
       await bootAudio();
       const player = $("au");
@@ -223,11 +275,23 @@
       useSource(fileSource, { audible: true });
       await player.play();
       setMessage("Reproduciendo " + file.name);
+      analyzeSong(file);
     } catch (err) {
       setMessage("No se pudo reproducir el archivo: " + err.message);
-    } finally {
-      event.target.value = ""; // permite volver a elegir el mismo archivo
     }
+  }
+
+  $("filebtn").onclick = () => $("file").click();
+
+  $("au").onended = () => {
+    if (source === fileSource)
+      setMessage("El audio terminó. Las vistas conservan la imagen final: abrí una y usá Exportar PNG para guardarla.");
+  };
+
+  $("file").onchange = async (event) => {
+    const file = event.target.files[0];
+    event.target.value = ""; // permite volver a elegir el mismo archivo
+    if (file) await loadFile(file);
   };
 
   $("tab").onclick = async () => {
@@ -313,32 +377,208 @@
     }
   };
 
+  // ───────────────────────── Arrastrar y soltar ─────────────────────────
+
+  const isMediaFile = (file) => /^(audio|video)\//.test(file.type) || /\.(mp3|wav|ogg|oga|flac|m4a|aac|opus|webm|mp4)$/i.test(file.name);
+  let dragDepth = 0; // dragenter/dragleave se disparan también al pasar por los hijos
+
+  document.addEventListener("dragenter", (event) => {
+    event.preventDefault();
+    dragDepth++;
+    document.body.classList.add("dragging");
+  });
+  document.addEventListener("dragover", (event) => event.preventDefault());
+  document.addEventListener("dragleave", () => {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) document.body.classList.remove("dragging");
+  });
+  document.addEventListener("drop", (event) => {
+    event.preventDefault();
+    dragDepth = 0;
+    document.body.classList.remove("dragging");
+    const file = event.dataTransfer && event.dataTransfer.files[0];
+    if (!file) return;
+    if (isMediaFile(file)) loadFile(file);
+    else setMessage("“" + file.name + "” no parece un archivo de audio.");
+  });
+
+  // ───────────────────────── Análisis de la canción completa ─────────────────────────
+
+  const SONG_ROWS = 180; // filas (frecuencias) del espectrograma completo
+  const SONG_MAX_FRAMES = 1200; // columnas máximas (tiempo)
+  const SONG_MAX_SSM = 600; // vectores máximos de la autosimilitud completa
+  const SONG_FFT = 4096;
+
+  /** Mezcla todos los canales a mono. */
+  function toMono(buffer) {
+    const mono = new Float32Array(buffer.length);
+    for (let c = 0; c < buffer.numberOfChannels; c++) {
+      const data = buffer.getChannelData(c);
+      for (let i = 0; i < mono.length; i++) mono[i] += data[i] / buffer.numberOfChannels;
+    }
+    return mono;
+  }
+
+  /** Dibuja una matriz de autosimilitud n×n en un canvas de n×n píxeles. */
+  function matrixToCanvas(matrix, n, target = document.createElement("canvas")) {
+    target.width = target.height = n;
+    const g = target.getContext("2d");
+    const image = g.createImageData(n, n);
+    for (let i = 0; i < n * n; i++) {
+      const contrast = clamp(Math.max(0, matrix[i]) ** 5); // realza las zonas muy parecidas
+      const [r, gr, b] = colorTable[Math.round(contrast * 255)];
+      image.data[i * 4] = r;
+      image.data[i * 4 + 1] = gr;
+      image.data[i * 4 + 2] = b;
+      image.data[i * 4 + 3] = 255;
+    }
+    g.putImageData(image, 0, 0);
+    return target;
+  }
+
+  /** Pinta columnas 0..1 (fila 0 = grave) en un canvas, con los agudos arriba. */
+  function columnsToCanvas(columns, target = document.createElement("canvas")) {
+    target.width = columns.length;
+    target.height = SONG_ROWS;
+    const g = target.getContext("2d");
+    const image = g.createImageData(columns.length, SONG_ROWS);
+    columns.forEach((column, x) => {
+      for (let r = 0; r < SONG_ROWS; r++) {
+        const [red, green, blue] = colorTable[Math.round(column[r] * 255)];
+        const i = ((SONG_ROWS - 1 - r) * columns.length + x) * 4;
+        image.data[i] = red;
+        image.data[i + 1] = green;
+        image.data[i + 2] = blue;
+        image.data[i + 3] = 255;
+      }
+    });
+    g.putImageData(image, 0, 0);
+    return target;
+  }
+
+  /** Vuelve a pintar las imágenes de la canción con la paleta actual. */
+  function repaintSong() {
+    if (!song) return;
+    columnsToCanvas(song.columns, song.spectrogram);
+    matrixToCanvas(song.matrix, song.matrixSize, song.ssm);
+  }
+
+  /**
+   * Decodifica el archivo completo y calcula, por tramos para no congelar la
+   * página: el espectrograma de toda la canción, la autosimilitud completa y
+   * la tonalidad global.
+   */
+  async function analyzeSong(file) {
+    const token = ++songToken;
+    song = null;
+    songProgress = 0;
+    const label = "Reproduciendo " + file.name;
+    try {
+      const buffer = await audioCtx.decodeAudioData(await file.arrayBuffer());
+      if (token !== songToken) return;
+      const samples = toMono(buffer);
+      const sampleRate = buffer.sampleRate;
+      const frameCount = Math.max(1, Math.min(SONG_MAX_FRAMES, Math.floor(buffer.duration / 0.1)));
+      const hop = Math.max(0, samples.length - SONG_FFT) / Math.max(1, frameCount - 1);
+      const columns = [];
+      const frameFeatures = [];
+      const totalChroma = new Array(12).fill(0);
+
+      for (let f = 0; f < frameCount; f++) {
+        const mag = A.magnitudeSpectrum(samples, Math.round(f * hop), SONG_FFT);
+        columns.push(A.spectrumColumn(mag, sampleRate, SONG_FFT, SONG_ROWS, MIN_HZ, MAX_HZ));
+        const feature = A.featureVector(mag, sampleRate, SONG_FFT);
+        frameFeatures.push(feature);
+        const loudness = A.rms(mag);
+        for (let i = 0; i < 12; i++) totalChroma[i] += feature[i] * loudness;
+
+        if (f % 25 === 24) {
+          songProgress = f / frameCount;
+          setMessage(label + " · analizando la canción completa… " + Math.round(songProgress * 100) + " %");
+          await sleep(); // cede el control para que la página siga respondiendo
+          if (token !== songToken) return;
+        }
+      }
+
+      // Autosimilitud: promedia grupos de cuadros para no superar SONG_MAX_SSM vectores
+      const group = Math.ceil(frameFeatures.length / SONG_MAX_SSM);
+      const vectors = [];
+      for (let i = 0; i < frameFeatures.length; i += group) {
+        const slice = frameFeatures.slice(i, i + group);
+        vectors.push(slice[0].map((_, k) => slice.reduce((sum, v) => sum + v[k], 0) / slice.length));
+      }
+      const matrix = A.selfSim(vectors);
+      const key = A.detectKey(totalChroma);
+
+      song = {
+        name: file.name,
+        duration: buffer.duration,
+        columns,
+        matrix,
+        matrixSize: vectors.length,
+        spectrogram: columnsToCanvas(columns),
+        ssm: matrixToCanvas(matrix, vectors.length),
+        key,
+      };
+      songProgress = null;
+      setMessage(label + " · canción analizada" + (key ? " (tonalidad estimada: " + key.name + ")" : "") + ".");
+    } catch (err) {
+      if (token !== songToken) return;
+      songProgress = null;
+      setMessage(label + " (no se pudo analizar la canción completa: " + err.message + ")");
+    }
+  }
+
+  /** ¿Se está mostrando el archivo analizado? (la autosimilitud y la tonalidad usan la canción completa) */
+  const songMode = () => Boolean(song) && source === fileSource && Boolean(fileSource);
+
+  /** Fracción reproducida del archivo (0..1). */
+  const songPosition = () => (song ? clamp($("au").currentTime / song.duration) : 0);
+
+  /** Salta a la posición tocada sobre la vista (solo en la ventana y con canción analizada). */
+  function seekFromClick(key, event) {
+    if (openPanel !== key || !songMode()) return;
+    const canvas = canvases[key];
+    const rect = canvas.getBoundingClientRect();
+    const width = rect.width || canvas.width;
+    $("au").currentTime = clamp((event.clientX - rect.left) / width) * song.duration;
+  }
+  canvases.song.onclick = (event) => seekFromClick("song", event);
+  canvases.ssm.onclick = (event) => seekFromClick("ssm", event);
+
   // ───────────────────────── Controles ─────────────────────────
 
-  $("sm").oninput = () => {
-    if (mixAnalyser) mixAnalyser.smoothingTimeConstant = +$("sm").value;
-  };
-  $("pers").oninput = () => {
-    trailPersistence = +$("pers").value;
-  };
-  $("fft").onchange = () => {
-    if (mixAnalyser) setFftSize(+$("fft").value);
-  };
-  $("pal").onchange = () => {
-    setPalette(+$("pal").value);
-    ssmDirty = true;
-    drawSelfSimilarity();
-    drawThumbnails();
-  };
-  $("frz").onclick = () => {
+  function toggleFreeze() {
     frozen = !frozen;
     $("frz").classList.toggle("on", frozen);
     $("frz").textContent = frozen ? "Reanudar análisis" : "Congelar análisis";
+  }
+
+  $("sm").oninput = () => {
+    if (mixAnalyser) mixAnalyser.smoothingTimeConstant = +$("sm").value;
+    saveSettings();
   };
+  $("pers").oninput = () => {
+    trailPersistence = +$("pers").value;
+    saveSettings();
+  };
+  $("fft").onchange = () => {
+    if (mixAnalyser) setFftSize(+$("fft").value);
+    saveSettings();
+  };
+  $("pal").onchange = () => {
+    setPalette(+$("pal").value);
+    repaintSong();
+    ssmDirty = true;
+    drawSelfSimilarity();
+    drawThumbnails();
+    saveSettings();
+  };
+  $("frz").onclick = toggleFreeze;
 
   // ───────────────────────── Dibujo de las vistas ─────────────────────────
 
-  for (const key in PANELS) {
+  function drawPlaceholder(key, text) {
     const g = contexts[key];
     const { width, height } = canvases[key];
     g.fillStyle = BG_COLOR;
@@ -346,9 +586,12 @@
     g.fillStyle = "#4a5378";
     g.font = "16px " + FONT;
     g.textAlign = "center";
-    g.fillText("Esperando audio…", width / 2, height / 2);
+    g.fillText(text, width / 2, height / 2);
     g.textAlign = "start";
   }
+
+  for (const key of PANEL_KEYS) drawPlaceholder(key, "Esperando audio…");
+  drawPlaceholder("song", "Cargá un archivo de audio para ver la canción completa");
 
   /** dB del analizador (−100..0) → 0..1. */
   const dbToUnit = (db) => clamp((db + 100) / 100);
@@ -507,53 +750,140 @@
     g.textAlign = "start";
   }
 
-  const ssmBuffer = document.createElement("canvas"); // matriz a 1 px por celda, luego se escala
+  const ssmBuffer = document.createElement("canvas"); // matriz en vivo a 1 px por celda
 
-  /** Redibuja la autosimilitud si hay datos nuevos y la vista se ve. */
+  /**
+   * Autosimilitud. Con un archivo analizado muestra la canción completa con
+   * una cruz en la posición actual (se redibuja en cada cuadro); si no, la
+   * ventana deslizante en vivo, solo cuando hay datos nuevos.
+   */
   function drawSelfSimilarity() {
-    if (!ssmDirty || !isShown("ssm") || features.length < 8) return;
-    ssmDirty = false;
-    const n = features.length;
-    const matrix = A.selfSim(features);
-    ssmBuffer.width = ssmBuffer.height = n;
-    const bufferCtx = ssmBuffer.getContext("2d");
-    const image = bufferCtx.createImageData(n, n);
-    for (let i = 0; i < n * n; i++) {
-      const contrast = clamp(Math.max(0, matrix[i]) ** 5); // realza las zonas muy parecidas
-      const [r, g, b] = colorTable[Math.round(contrast * 255)];
-      image.data[i * 4] = r;
-      image.data[i * 4 + 1] = g;
-      image.data[i * 4 + 2] = b;
-      image.data[i * 4 + 3] = 255;
-    }
-    bufferCtx.putImageData(image, 0, 0);
+    if (!isShown("ssm")) return;
     const g = contexts.ssm;
+    const { width: W, height: H } = canvases.ssm;
     g.imageSmoothingEnabled = false;
-    g.drawImage(ssmBuffer, 0, 0, canvases.ssm.width, canvases.ssm.height);
+
+    if (songMode()) {
+      const p = songPosition();
+      g.drawImage(song.ssm, 0, 0, W, H);
+      g.fillStyle = accents[0];
+      g.fillRect(p * W, 0, 1, H);
+      g.fillRect(0, p * H, W, 1);
+      return;
+    }
+    if (!ssmDirty || features.length < 8) return;
+    ssmDirty = false;
+    matrixToCanvas(A.selfSim(features), features.length, ssmBuffer);
+    g.drawImage(ssmBuffer, 0, 0, W, H);
+  }
+
+  /** Afinador: nota grande, frecuencia y una aguja entre −50 y +50 cents. */
+  function drawTuner(rms, peak) {
+    const canvas = canvases.tuner;
+    const g = contexts.tuner;
+    const W = canvas.width;
+    const H = canvas.height;
+    clearCanvas(g, canvas);
+
+    const hasPitch = rms > SILENCE_RMS * 10 && peak > 0;
+    if (hasPitch) {
+      // Suaviza en escala logarítmica; si la nota cambia mucho, salta directo.
+      const jump = !tuner.freq || Math.abs(Math.log2(peak / tuner.freq)) > 1 / 24;
+      tuner.freq = jump ? peak : tuner.freq * (peak / tuner.freq) ** 0.25;
+    }
+    const reading = hasPitch ? A.tuning(tuner.freq) : null;
+    if (reading) tuner.cents += (reading.cents - tuner.cents) * 0.3;
+
+    // Escala
+    const left = 40;
+    const right = W - 40;
+    const y = H * 0.74;
+    const xOf = (cents) => left + ((cents + 50) / 100) * (right - left);
+    g.fillStyle = "#1c2238";
+    g.fillRect(left, y - 2, right - left, 4);
+    g.font = "12px " + FONT;
+    g.textAlign = "center";
+    for (let c = -50; c <= 50; c += 10) {
+      const major = c % 50 === 0 || c === 0;
+      g.fillStyle = c === 0 ? accents[0] : LABEL_COLOR;
+      g.fillRect(xOf(c) - 1, y - (major ? 16 : 9), 2, major ? 32 : 18);
+      if (major) g.fillText((c > 0 ? "+" : "") + c, xOf(c), y + 32);
+    }
+
+    if (!reading) {
+      g.fillStyle = "#4a5378";
+      g.font = "18px " + FONT;
+      g.fillText("Tocá o cantá una nota…", W / 2, H * 0.42);
+      g.textAlign = "start";
+      return;
+    }
+
+    const inTune = Math.abs(tuner.cents) < 5;
+    g.fillStyle = inTune ? accents[0] : colorAt(1 - Math.abs(tuner.cents) / 50);
+    g.fillRect(xOf(clamp(tuner.cents, -50, 50)) - 3, y - 26, 6, 52);
+    g.font = "bold 64px " + FONT;
+    g.fillText(reading.note, W / 2, H * 0.4);
+    g.fillStyle = LABEL_COLOR;
+    g.font = "15px " + FONT;
+    const cents = Math.round(tuner.cents);
+    g.fillText(
+      tuner.freq.toFixed(1).replace(".", ",") + " Hz · " + (cents > 0 ? "+" : "") + cents + " cents" + (inTune ? " · afinado" : ""),
+      W / 2,
+      H * 0.4 + 30
+    );
+    g.textAlign = "start";
+  }
+
+  /** Canción completa: espectrograma de todo el archivo, marcas de tiempo y cursor de reproducción. */
+  function drawSong() {
+    const canvas = canvases.song;
+    const g = contexts.song;
+    const W = canvas.width;
+    const H = canvas.height;
+    if (!song) {
+      const text =
+        songProgress != null
+          ? "Analizando la canción completa… " + Math.round(songProgress * 100) + " %"
+          : "Cargá un archivo de audio para ver la canción completa";
+      drawPlaceholder("song", text);
+      return;
+    }
+    const plotH = H - 22;
+    clearCanvas(g, canvas);
+    g.imageSmoothingEnabled = true;
+    g.drawImage(song.spectrogram, 0, 0, W, plotH);
+
+    g.font = "12px " + FONT;
+    g.fillStyle = LABEL_COLOR;
+    const step = Math.max(10, Math.ceil(song.duration / 8 / 10) * 10); // marcas cada ≥10 s
+    for (let t = 0; t <= song.duration; t += step) {
+      const x = (t / song.duration) * W;
+      g.fillRect(x, plotH, 1, 5);
+      g.fillText(formatTime(t), Math.min(x + 3, W - 34), H - 5);
+    }
+
+    if (songMode()) {
+      const x = songPosition() * W;
+      g.fillStyle = accents[0];
+      g.fillRect(x - 1, 0, 2, plotH);
+      g.fillText(formatTime($("au").currentTime), Math.min(x + 6, W - 40), 14);
+    }
   }
 
   // ───────────────────────── Bucle de análisis ─────────────────────────
-
-  /** Vector de características: 12 notas + energía en 8 bandas logarítmicas (normalizada). */
-  function featureVector(chromaValues, sampleRate, fftSize) {
-    const bandEnergy = [];
-    for (let b = 0; b < 8; b++) {
-      let sum = 0;
-      const from = Math.ceil((BAND_EDGES[b] * fftSize) / sampleRate);
-      const to = (BAND_EDGES[b + 1] * fftSize) / sampleRate;
-      for (let i = from; i < to && i < magnitude.length; i++) sum += magnitude[i] * magnitude[i];
-      bandEnergy.push(Math.log10(1 + sum * 1e4));
-    }
-    const max = Math.max(...bandEnergy) || 1;
-    return [...chromaValues, ...bandEnergy.map((v) => v / max)];
-  }
 
   function updateMetrics(rms, peak, bandShares, sampleRate, fftSize) {
     const silent = rms < SILENCE_RMS;
     $("m-rms").textContent = rms > 1e-5 ? (20 * Math.log10(rms)).toFixed(1) + " dB" : "−∞";
     $("m-note").textContent = !silent && peak ? A.noteName(peak) + " · " + Math.round(peak) + " Hz" : "—";
     $("m-cen").textContent = silent ? "—" : Math.round(A.centroid(magnitude, sampleRate, fftSize)) + " Hz";
-    $("m-bpm").textContent = bpm ? Math.round(bpm) : "—";
+    $("m-bpm").textContent = tempo.bpm ? Math.round(tempo.bpm) : "—";
+    $("m-bpmc").textContent = tempo.bpm ? "confianza " + Math.round(tempo.confidence * 100) + " %" : "";
+
+    const key = songMode() ? song.key : A.detectKey(keyChroma);
+    $("m-key").textContent = key && key.score > 0.3 ? key.name : "—";
+    $("m-keys").textContent = key && key.score > 0.3 ? (songMode() ? "de toda la canción" : "de los últimos segundos") : "";
+
     bandShares.forEach((share, i) => {
       $("b" + i).style.width = Math.max(3, silent ? 0 : share * 100) + "%";
     });
@@ -591,6 +921,7 @@
     const chromaValues = A.chroma(magnitude, sampleRate, fftSize);
     const bandShares = A.bands(magnitude, sampleRate, fftSize);
     chromaValues.forEach((v, i) => (chromaSmooth[i] = chromaSmooth[i] * 0.7 + v * 0.3));
+    if (rms > 0.003) chromaValues.forEach((v, i) => (keyChroma[i] = keyChroma[i] * 0.997 + v * 0.003));
 
     // Golpe: el flujo supera 1,5 veces el promedio reciente
     const recent = onsetEnvelope.slice(-60);
@@ -603,14 +934,13 @@
 
     if (now - timers.feature > 400 && rms > 0.002) {
       timers.feature = now;
-      features.push(featureVector(chromaValues, sampleRate, fftSize));
+      features.push(A.featureVector(magnitude, sampleRate, fftSize));
       if (features.length > 200) features.shift();
       ssmDirty = true;
-      drawSelfSimilarity();
     }
     if (now - timers.tempo > 500) {
       timers.tempo = now;
-      bpm = A.estimateBPM(onsetEnvelope.slice(-Math.round(fps * 8)), fps);
+      tempo = A.estimateTempo(onsetEnvelope.slice(-Math.round(fps * 8)), fps);
     }
     if (now - timers.metrics > 200) {
       timers.metrics = now;
@@ -621,11 +951,19 @@
 
     // El espectrograma se dibuja siempre para no perder historia (es una sola columna);
     // el resto solo si su tarjeta está en pantalla o su ventana está abierta.
-    drawSpectrogram(sampleRate, fftSize);
-    if (isShown("spec")) drawSpectrum(sampleRate, fftSize, peak);
-    if (isShown("trail")) drawTrail(rms);
-    if (isShown("rad")) drawRadial(sampleRate, fftSize, bandShares[0]);
-    if (isShown("chroma")) drawChroma(chromaValues.indexOf(1));
+    // Con un archivo en pausa o terminado (silencio total) las vistas no se redibujan:
+    // queda la imagen que se formó hasta ese momento en lugar de apagarse.
+    const holdImage = source === fileSource && Boolean(fileSource) && rms < SILENCE_RMS;
+    if (!holdImage) {
+      drawSpectrogram(sampleRate, fftSize);
+      if (isShown("spec")) drawSpectrum(sampleRate, fftSize, peak);
+      if (isShown("trail")) drawTrail(rms);
+      if (isShown("rad")) drawRadial(sampleRate, fftSize, bandShares[0]);
+      if (isShown("chroma")) drawChroma(chromaValues.indexOf(1));
+      if (isShown("tuner")) drawTuner(rms, peak);
+    }
+    if (isShown("song")) drawSong();
+    drawSelfSimilarity();
 
     if (now - timers.thumbs > 150) {
       timers.thumbs = now;
@@ -637,7 +975,7 @@
 
   const dialog = $("dlg");
   const thumbContexts = {};
-  const visibleCards = new Set(Object.keys(PANELS)); // sin IntersectionObserver se dibuja todo
+  const visibleCards = new Set(PANEL_KEYS); // sin IntersectionObserver se dibuja todo
   let openPanel = null;
 
   /** ¿La vista está a la vista del usuario? (ventana abierta o tarjeta en pantalla) */
@@ -645,14 +983,12 @@
     return openPanel ? openPanel === key : visibleCards.has(key);
   }
 
-  $("cards").innerHTML = Object.entries(PANELS)
-    .map(
-      ([key, panel]) =>
-        `<button class="card" type="button" data-k="${key}">` +
-        `<canvas width="320" height="180"></canvas>` +
-        `<h3>${panel.title}</h3><p>${panel.desc}</p><b>Abrir →</b></button>`
-    )
-    .join("");
+  $("cards").innerHTML = PANEL_KEYS.map(
+    (key, i) =>
+      `<button class="card" type="button" data-k="${key}" aria-keyshortcuts="${i + 1}">` +
+      `<canvas width="320" height="180"></canvas>` +
+      `<h3>${PANELS[key].title}</h3><p>${PANELS[key].desc}</p><b>Abrir →</b> <kbd>${i + 1}</kbd></button>`
+  ).join("");
 
   const cards = document.querySelectorAll(".card");
   cards.forEach((card) => {
@@ -690,24 +1026,30 @@
 
   /** Abre la vista en grande: mueve su canvas y los controles a la ventana. */
   function openView(key) {
+    if (dialog.open) dialog.close();
     openPanel = key;
     const canvas = canvases[key];
     $("dt").textContent = PANELS[key].title;
     $("dd").textContent = PANELS[key].desc;
     canvas.style.width = canvas.width > canvas.height ? "100%" : "";
+    canvas.classList.toggle("seekable", key === "song" || key === "ssm");
     $("dv").appendChild(canvas);
     $("dctl").appendChild($("ctl"));
+    ssmDirty = true;
     drawSelfSimilarity();
+    if (key === "song") drawSong();
     if (dialog.showModal) dialog.showModal();
     else dialog.setAttribute("open", "");
   }
 
   dialog.onclose = () => {
+    if (recorder) recorder.stop();
     const canvas = canvases[openPanel];
     canvas.style.width = "";
     $("stage").appendChild(canvas);
     $("msg").before($("ctl"));
     openPanel = null;
+    ssmDirty = true;
     drawSelfSimilarity();
     drawThumbnails();
   };
@@ -717,16 +1059,90 @@
     if (event.target === dialog) dialog.close(); // clic en el fondo
   };
 
-  $("dpng").onclick = () => {
+  function exportPng() {
     const key = openPanel;
-    canvases[key].toBlob((blob) => {
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = "sinestesia-" + key + ".png";
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-    });
-  };
+    canvases[key].toBlob((blob) => download(blob, "sinestesia-" + key + ".png"));
+  }
+  $("dpng").onclick = exportPng;
+
+  // ───────────────────────── Grabación de video ─────────────────────────
+
+  function setRecordButton(active) {
+    $("drec").classList.toggle("on", active);
+    $("drec").textContent = active ? "Detener grabación" : "Grabar video";
+  }
+
+  /** Graba la vista abierta (con el audio de la fuente actual) y la descarga al detener. */
+  function toggleRecording() {
+    if (recorder) {
+      recorder.stop();
+      return;
+    }
+    const key = openPanel;
+    const canvas = canvases[key];
+    if (!key || !canvas.captureStream || !window.MediaRecorder) {
+      setMessage("Tu navegador no permite grabar video de las vistas.");
+      return;
+    }
+    const stream = canvas.captureStream(30);
+    if (audioCtx) {
+      recordDestination ||= audioCtx.createMediaStreamDestination();
+      if (source) source.connect(recordDestination);
+      recordDestination.stream.getAudioTracks().forEach((track) => stream.addTrack(track));
+    }
+    const mimeType = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm", "video/mp4"].find(
+      (type) => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(type)
+    );
+    const chunks = [];
+    const rec = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    rec.ondataavailable = (event) => {
+      if (event.data && event.data.size) chunks.push(event.data);
+    };
+    rec.onstop = () => {
+      const type = rec.mimeType || mimeType || "video/webm";
+      download(new Blob(chunks, { type }), "sinestesia-" + key + (type.includes("mp4") ? ".mp4" : ".webm"));
+      if (source && recordDestination) {
+        try {
+          source.disconnect(recordDestination);
+        } catch {}
+      }
+      stream.getVideoTracks().forEach((track) => track.stop());
+      recorder = null;
+      setRecordButton(false);
+      setMessage("Video guardado.");
+    };
+    recorder = rec;
+    rec.start(1000);
+    setRecordButton(true);
+    setMessage("Grabando video de “" + PANELS[key].title + "”… se descarga al detener.");
+  }
+  $("drec").onclick = toggleRecording;
+
+  // ───────────────────────── Atajos de teclado ─────────────────────────
+
+  document.addEventListener("keydown", (event) => {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const tag = event.target.tagName;
+    if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+    const key = event.key.toLowerCase();
+
+    if (key === " ") {
+      if (tag === "BUTTON" || tag === "AUDIO") return; // Espacio sigue activando el botón enfocado
+      event.preventDefault();
+      toggleFreeze();
+    } else if (key === "f") toggleFreeze();
+    else if (/^[1-9]$/.test(key) && PANEL_KEYS[+key - 1]) openView(PANEL_KEYS[+key - 1]);
+    else if (key === "e" && openPanel) exportPng();
+    else if (key === "g" && openPanel) toggleRecording();
+    else if (key === "d") $("demo").click();
+    else if (key === "m") $("mic").click();
+    else if (key === "a") $("filebtn").click();
+    else if (key === "p" && source === fileSource && fileSource) {
+      const player = $("au");
+      if (player.paused) player.play();
+      else player.pause();
+    }
+  });
 
   drawThumbnails();
 

@@ -53,7 +53,8 @@
       <div><small>Volumen (RMS)</small><b id="m-rms">—</b></div>
       <div><small>Nota dominante</small><b id="m-note">—</b></div>
       <div><small>Brillo (centroide)</small><b id="m-cen">—</b></div>
-      <div><small>Tempo estimado</small><b><span id="m-bpm">—</span> <i id="dot"></i></b></div>
+      <div><small>Tempo estimado</small><b><span id="m-bpm">—</span> <i id="dot"></i></b><small id="m-bpmc"></small></div>
+      <div><small>Tonalidad</small><b id="m-key">—</b><small id="m-keys"></small></div>
       <div class="bd">
         <small>Graves · medios · agudos</small>
         <span><u id="b0"></u><u id="b1"></u><u id="b2"></u></span>
@@ -71,6 +72,8 @@
       <canvas id="c-rad" width="560" height="560"></canvas>
       <canvas id="c-chroma" width="560" height="300"></canvas>
       <canvas id="c-ssm" width="480" height="480"></canvas>
+      <canvas id="c-tuner" width="560" height="300"></canvas>
+      <canvas id="c-song" width="960" height="360"></canvas>
     </div>
 
     <dialog id="dlg" aria-labelledby="dt">
@@ -81,6 +84,7 @@
         </div>
         <div class="da">
           <button id="dpng" type="button">Exportar PNG</button>
+          <button id="drec" type="button">Grabar video</button>
           <button id="dx" type="button">Cerrar</button>
         </div>
       </div>
@@ -88,7 +92,10 @@
       <div id="dctl"></div>
     </dialog>
 
-    <footer class="ft">Las estimaciones de tempo y notas funcionan mejor con ritmos marcados y sonidos limpios. El micrófono requiere HTTPS o localhost.</footer>
+    <footer class="ft">
+      <p>También podés arrastrar un archivo de audio a la página. Las estimaciones de tempo, tonalidad y notas funcionan mejor con ritmos marcados y sonidos limpios. El micrófono requiere HTTPS o localhost.</p>
+      <p><b>Atajos:</b> <kbd>1</kbd>–<kbd>8</kbd> abrir vista · <kbd>F</kbd> o <kbd>Espacio</kbd> congelar · <kbd>P</kbd> reproducir/pausar · <kbd>E</kbd> exportar PNG · <kbd>G</kbd> grabar video · <kbd>D</kbd> demo · <kbd>M</kbd> micrófono · <kbd>A</kbd> archivo · <kbd>Esc</kbd> cerrar</p>
+    </footer>
 
     <script src="analysis.js"></script>
     <script src="app.js"></script>

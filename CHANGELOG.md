@@ -1,5 +1,18 @@
 # Historial de cambios · Sinestesia
 
+## 0.9 · Mejoras funcionales
+- **Imagen final al terminar el audio:** con un archivo en pausa o terminado, las vistas dejan de redibujarse y conservan la imagen que se formó (antes la estela y el radial se apagaban y el espectrograma se llenaba de negro). Un aviso sugiere exportarla en PNG.
+- **Canción completa:** al cargar un archivo se decodifica y analiza entero en segundo plano (por tramos, sin congelar la página). Nueva vista **Canción completa** con el espectrograma de todo el archivo y el cursor de reproducción. La **Autosimilitud** pasa a mostrar la canción entera con una cruz en la posición actual. En ambas, tocar un punto salta a ese momento.
+- **Tonalidad:** nueva métrica con el algoritmo de Krumhansl-Schmuckler (24 tonalidades mayores y menores). En vivo usa los últimos segundos; con un archivo analizado, la canción completa.
+- **Afinador:** nueva vista con la nota más cercana, la frecuencia y una aguja entre −50 y +50 cents.
+- **Tempo más confiable:** se pondera cada candidato con una curva centrada en 120 BPM para reducir errores de octava, y se muestra la confianza.
+- **Grabar video:** botón en la ventana de cada vista que graba el canvas con el audio de la fuente y descarga un `.webm` (o `.mp4` en Safari). Se detiene al cerrar la ventana.
+- **Arrastrar y soltar** un archivo de audio sobre la página.
+- **Atajos de teclado:** 1–8 abrir vista, F/Espacio congelar, P reproducir/pausar, E exportar, G grabar, D demo, M micrófono, A archivo.
+- **Ajustes guardados:** suavizado, persistencia, resolución FFT y paleta se recuerdan entre visitas.
+- `analysis.js` suma `estimateTempo`, `detectKey`, `tuning`, `fft`, `magnitudeSpectrum`, `spectrumColumn` y `featureVector`, todos con tests.
+- `package.json` con `npm test` y GitHub Action que corre los tests en cada push.
+
 ## 0.8 · Código legible y correcciones
 - **Código legible:** `app.js`, `analysis.js`, `index.html` y `style.css` dejaron de estar compactados en pocas líneas. Ahora tienen nombres descriptivos, secciones y comentarios; el comportamiento es el mismo.
 - **Error corregido:** cambiar de fuente dos veces después de la demostración (demo → micrófono → pestaña) fallaba con "No se pudo…", porque se intentaba detener otra vez los osciladores ya detenidos (`InvalidStateError` en navegadores reales). La demo ahora se detiene una sola vez.
@@ -55,4 +68,4 @@
 - **Movimiento:** las tarjetas no se mueven; la animación está en el fondo y en las vistas.
 
 ## Pendiente / ideas
-Análisis offline del archivo completo, detección de tonalidad, afinador, grabación de la sesión y paletas personalizadas. Falta validar el comportamiento visual y sonoro en un navegador real.
+Paletas personalizadas, mejoras visuales (nitidez en pantallas de alta densidad, ejes, pantalla completa, diseño móvil) y demo publicada. Falta validar el comportamiento visual y sonoro en un navegador real.

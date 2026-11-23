@@ -1,0 +1,13 @@
+{
+  "name": "sinestesia",
+  "version": "0.9.0",
+  "private": true,
+  "description": "Laboratorio de audio en el navegador: espectro, espectrograma, estéreo, notas, tonalidad, tempo y autosimilitud.",
+  "scripts": {
+    "start": "npx serve .",
+    "test": "node test.js && node smoke.test.js"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.0"
+  }
+}
